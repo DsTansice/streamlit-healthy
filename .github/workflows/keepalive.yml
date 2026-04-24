@@ -13,6 +13,9 @@ env:
 jobs:
   keep-alive:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
     timeout-minutes: 10
 
     steps:
@@ -122,3 +125,22 @@ jobs:
           name: error-screenshot
           path: error.png
           retention-days: 7
+
+
+      - name: 保活提交（不修改 workflow）
+        env:
+          GITHUB_TOKEN: ${{ secrets.REPO_TOKEN }}
+        run: |
+          # 创建/更新一个保活记录文件
+          cat > .keepalive << EOF
+          last_run: $(date -u +%Y-%m-%d_%H:%M:%S)_UTC
+          next_cron: $(grep -oP "(?<=- cron: ')[^']+" .github/workflows/keepalive.yml)
+          EOF
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .keepalive
+          git commit -m "🚀 auto: 保活 $(date -u +%Y-%m-%d)" || echo "无变更"
+          
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
+          git push
