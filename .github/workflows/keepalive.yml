@@ -65,38 +65,76 @@ jobs:
               });
 
               console.log('⏳ Waiting for page to stabilize...');
-              await page.waitForTimeout(5000);
+              await page.waitForTimeout(8000);
 
-              const wakeButton = page.locator('button:has-text("Yes, get this app back up!")');
-              const wakeButtonCount = await wakeButton.count();
+              // 获取页面标题和可见文本，用于诊断
+              const title = await page.title();
+              console.log(`📄 Page title: ${title}`);
 
-              if (wakeButtonCount > 0) {
+              const pageText = await page.locator('body').innerText({ timeout: 5000 }).catch(() => 'N/A');
+              console.log(`📝 Page text snippet: ${pageText.substring(0, 200)}`);
+
+              // 截图用于调试
+              await page.screenshot({ path: 'page_state.png', fullPage: true });
+              console.log('📸 Screenshot saved');
+
+              // 方法1: 用 XPath 查找唤醒按钮（参考 Selenium 方案）
+              const wakeButtonXPath = page.locator('xpath=//button[contains(text(),"Yes, get this app back up")]');
+              const wakeButtonCount1 = await wakeButtonXPath.count();
+
+              // 方法2: 用 role + name 查找
+              const wakeButtonRole = page.getByRole('button', { name: /Yes, get this app back up/i });
+              const wakeButtonCount2 = await wakeButtonRole.count();
+
+              // 方法3: 用通用文本查找
+              const wakeButtonText = page.locator('text=Yes, get this app back up');
+              const wakeButtonCount3 = await wakeButtonText.count();
+
+              console.log(`🔍 Wake button found: XPath=${wakeButtonCount1}, Role=${wakeButtonCount2}, Text=${wakeButtonCount3}`);
+
+              let wakeButton = null;
+              if (wakeButtonCount1 > 0) wakeButton = wakeButtonXPath;
+              else if (wakeButtonCount2 > 0) wakeButton = wakeButtonRole;
+              else if (wakeButtonCount3 > 0) wakeButton = wakeButtonText;
+
+              if (wakeButton) {
                 console.log('😴 App is sleeping. Clicking wake button...');
                 await wakeButton.click();
 
-                console.log('⏳ Waiting for app to wake up...');
-                await page.waitForTimeout(30000);
+                console.log('⏳ Waiting for app to wake up (60s)...');
+                await page.waitForTimeout(60000);
 
-                try {
-                  await page.waitForSelector('[data-testid="stAppViewContainer"], .stApp, iframe', { 
-                    timeout: 60000 
-                  });
-                  console.log('✅ App is now awake and running!');
-                } catch {
-                  console.log('⚠️ Wake button clicked, but app may still be loading');
+                // 再次截图看状态
+                await page.screenshot({ path: 'after_wake.png', fullPage: true });
+
+                // 检查页面是否已变为正常 Streamlit 页面
+                const newTitle = await page.title();
+                const hasStreamlit = await page.locator('body').innerText().then(t => t.includes('streamlit') || t.includes('Streamlit')).catch(() => false);
+
+                if (newTitle !== title || hasStreamlit) {
+                  console.log('✅ App appears to be waking up!');
+                } else {
+                  console.log('⚠️ Wake button clicked, checking final state...');
                 }
               } else {
-                const appContainer = page.locator('[data-testid="stAppViewContainer"], .stApp');
-                const isRunning = await appContainer.count() > 0;
+                // 检查是否是正常运行的 Streamlit 页面
+                const bodyText = await page.locator('body').innerText({ timeout: 5000 }).catch(() => '');
+                const isStreamlitRunning = bodyText.includes('streamlit') || 
+                                           bodyText.includes('Streamlit') ||
+                                           bodyText.includes('Running') ||
+                                           await page.locator('[data-testid="stAppViewContainer"]').count() > 0 ||
+                                           await page.locator('.stApp').count() > 0 ||
+                                           await page.locator('iframe').count() > 0;
 
-                if (isRunning) {
+                if (isStreamlitRunning) {
                   console.log('✅ App is already running');
+                } else if (bodyText.includes('Please wait') || bodyText.includes('Loading')) {
+                  console.log('⏳ App is loading...');
                 } else {
-                  console.log('⚠️ Unknown state - no wake button and no app container found');
+                  console.log('⚠️ Unknown state - no wake button found');
+                  console.log(`Body text: ${bodyText.substring(0, 300)}`);
                 }
               }
-
-              await page.waitForTimeout(5000);
 
             } catch (error) {
               console.error('❌ Error:', error.message);
@@ -110,14 +148,14 @@ jobs:
 
           node wake.js
 
-      - name: Upload error screenshot (if failed)
-        if: failure()
+      - name: Upload screenshots
         uses: actions/upload-artifact@v4
         with:
-          name: error-screenshot
-          path: error.png
+          name: screenshots
+          path: '*.png'
           retention-days: 7
 
+      
       - name: 保活提交（不修改 workflow）
         env:
           GITHUB_TOKEN: ${{ secrets.REPO_TOKEN }}
